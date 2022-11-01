@@ -147,12 +147,11 @@ public:
 	void propagateMessageFromClientToReplicas(MessageType msgType, string key, string value);
 	bool isRingStale(vector<Node> currentMembershipList);
 	bool areNodesSame(Node node1, Node node2);
-	vector<pair<string, string>> findMyKeys(ReplicaType rep_type);
-	int ifExistNode(vector<Node> v, Node n1);
+	vector<pair<string, string>> getAllKeys(ReplicaType replicaType);
 	void initializeSuccessorAndPredecessorNodes();
 	bool nodeExistsInList(vector<Node> list, Node node);
-	void manageFailedSuccessors(vector<Node> new_replicas, Address myAddress);
-	void manageFailedPredecessors(vector<Node> new_bosses, vector<Node> new_replicas, Address myAddress);
+	void manageFailedSuccessors(vector<Node> newSuccessors, Address myAddress);
+	void manageFailedPredecessors(vector<Node> newPredecessors, vector<Node> newSuccessors, Address myAddress);
 
 	~MP2Node();
 };

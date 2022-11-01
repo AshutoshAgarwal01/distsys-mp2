@@ -391,34 +391,33 @@ void MP2Node::stabilizationProtocol() {
 	 */
 	if (CUSTOMLOGENABLED == 1){
 		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Performing stablization.");
-		// cout << "Performing stablization " << endl;
 	}
 
 	Address myAddress = getMemberNode()->addr;
-    vector<Node> new_replicas, new_bosses;
-    Node this_node = Node(myAddress);
+    vector<Node> newSuccessors;
+	vector<Node> newPredecessors;
 
 	// Find new successors and predecessors.
 	// We are in this method, means that one or more of them will be different than current successors/ predecessors.
 	// Store these in temporary variables for now.
 	for (unsigned int i = 0; i < ring.size(); i++) {
-		if (areNodesSame(ring[i], this_node)){
-			new_bosses.push_back(ring[(i - 1 + ring.size()) % ring.size()]);
-			new_bosses.push_back(ring[(i - 2 + ring.size()) % ring.size()]);
+		if (areNodesSame(ring[i], Node(myAddress))){
+			newPredecessors.push_back(ring[(i - 1 + ring.size()) % ring.size()]);
+			newPredecessors.push_back(ring[(i - 2 + ring.size()) % ring.size()]);
 
-			new_replicas.push_back(ring[(i + 1) % ring.size()]);
-			new_replicas.push_back(ring[(i + 2) % ring.size()]);
+			newSuccessors.push_back(ring[(i + 1) % ring.size()]);
+			newSuccessors.push_back(ring[(i + 2) % ring.size()]);
 
 			break;
 		}
 	}
 
-	manageFailedSuccessors(new_replicas, myAddress);
-	manageFailedPredecessors(new_bosses, new_replicas, myAddress);
+	manageFailedSuccessors(newSuccessors, myAddress);
+	manageFailedPredecessors(newPredecessors, newSuccessors, myAddress);
 
     // Now update the new replicas and bosses
-    hasMyReplicas  = new_replicas;
-    haveReplicasOf = new_bosses;
+    hasMyReplicas  = newSuccessors;
+    haveReplicasOf = newPredecessors;
 
 }
 
@@ -527,33 +526,33 @@ bool MP2Node::areNodesSame(Node node1, Node node2) {
  * 1. Identify failed successor(s). SECONDART/ TERTIARY.
  * 2. Replicate keys from current node (PRIMARY) to failed successors.
  */
-void MP2Node::manageFailedSuccessors(vector<Node> new_replicas, Address myAddress) {
-    vector<pair<string, string>> keys = findMyKeys(PRIMARY);
+void MP2Node::manageFailedSuccessors(vector<Node> newSuccessors, Address myAddress) {
+    vector<pair<string, string>> keys = getAllKeys(PRIMARY);
 	
 	string logMessage = "None";
-	bool secondaryFailed = !nodeExistsInList(new_replicas, hasMyReplicas[0]);
-	bool terFailed = !nodeExistsInList(new_replicas, hasMyReplicas[1]);
+	bool secondaryFailed = !nodeExistsInList(newSuccessors, hasMyReplicas[0]);
+	bool terFailed = !nodeExistsInList(newSuccessors, hasMyReplicas[1]);
 
 	if (secondaryFailed && terFailed){
 		logMessage = "Both secondary and tertiary failed";
 		MessageType messageType = CREATE;
-		for (unsigned int i = 0; i < new_replicas.size(); i++) {
+		for (unsigned int i = 0; i < newSuccessors.size(); i++) {
 			ReplicaType replicaType = i == 0 ? SECONDARY : TERTIARY;
 			for (unsigned int k = 0; k < keys.size(); k++) {
 				Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, replicaType);
-				emulNet->ENsend(&myAddress, new_replicas[i].getAddress(), msg->toString());
+				emulNet->ENsend(&myAddress, newSuccessors[i].getAddress(), msg->toString());
 				free(msg);
 			}
 		}
 	}
 	else if (secondaryFailed){
 		logMessage = "Only secondary failed";
-		for (unsigned int i = 0; i < new_replicas.size(); i++) {
+		for (unsigned int i = 0; i < newSuccessors.size(); i++) {
 			ReplicaType replicaType = i == 0 ? SECONDARY : TERTIARY;
 			MessageType messageType = i == 0 ? UPDATE : CREATE;
 			for (unsigned int k = 0; k < keys.size(); k++) {
 				Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, replicaType);
-				emulNet->ENsend(&myAddress, new_replicas[i].getAddress(), msg->toString());
+				emulNet->ENsend(&myAddress, newSuccessors[i].getAddress(), msg->toString());
 				free(msg);
 			}
 		}
@@ -564,7 +563,7 @@ void MP2Node::manageFailedSuccessors(vector<Node> new_replicas, Address myAddres
 		MessageType messageType = CREATE;
 		for (unsigned int k = 0; k < keys.size(); k++) {
 			Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, replicaType);
-			emulNet->ENsend(&myAddress, new_replicas[1].getAddress(), msg->toString());
+			emulNet->ENsend(&myAddress, newSuccessors[1].getAddress(), msg->toString());
 			free(msg);
 		}
 	}
@@ -583,72 +582,75 @@ void MP2Node::manageFailedSuccessors(vector<Node> new_replicas, Address myAddres
  * 2. Locate new PRIMARY/ secondary and tertiary replicas for this failed one.
  * 3. Replicate all PRIMARY keys to newly identified replicas.
  */
-void MP2Node::manageFailedPredecessors(vector<Node> new_bosses, vector<Node> new_replicas, Address myAddress) {
-	// check for my bosses if they failed
-    for (unsigned int i = 0; i < haveReplicasOf.size(); i++) {
-        if (areNodesSame(haveReplicasOf[i], new_bosses[i])) {
-            break; // if the boss is same and at same location, then break because boss will take care of its boss and will also correct this nodes replica type if necessary as is shown below.
-        }
-        else {
-            if (ifExistNode(new_bosses, haveReplicasOf[i]) != -1) {
-                break; // if there is some boss present which was also present earlier then don't do anything as it will take care of things and nodes in this system only leave, no join is there'
-            } else {
-                // else find keys at this node which are secondary or tertiary depending on how this node is located according to the new boss.
-                vector<pair<string, string>> keys = findMyKeys(static_cast<ReplicaType>(i + 1));
-                Entry *e; // Update keys at this local server. No need to send message since all the operations are local.
-                for (unsigned int k = 0; k < keys.size(); k++){
-                    e = new Entry(keys[k].second, par->getcurrtime(), PRIMARY);
-                    ht->update(keys[k].first, e->convertToString());
-                    free(e);
-                }
-                if (i == 0){ // If this was the secondary replica of the failed boss, then make your first replica secondary from tertiary by updating it.
-                    // Also, add new tertiary replica by sending create messages for all the keys of the bosses which have now become primary at this server.
-                    Message *msg;
-                    for (unsigned int k = 0; k < keys.size(); k++) {
-                        if (areNodesSame(new_replicas[0], hasMyReplicas[0])){
-                            msg = new Message(-1, getMemberNode()->addr, UPDATE, keys[k].first, keys[k].second, SECONDARY);
-                            emulNet->ENsend(&getMemberNode()->addr, new_replicas[0].getAddress(), msg->toString());
-                        } else {
-                            msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, SECONDARY);
-                            emulNet->ENsend(&getMemberNode()->addr, new_replicas[0].getAddress(), msg->toString());
-                        }
-                        free(msg);
+void MP2Node::manageFailedPredecessors(vector<Node> newPredecessors, vector<Node> newSuccessors, Address myAddress) {
+	Node firstPredecessor = haveReplicasOf[0];
+	Node secondPredecessor = haveReplicasOf[1];
+	bool firstPredecessorFailed = !nodeExistsInList(newPredecessors, firstPredecessor);
+	bool secondPredecessorFailed = !nodeExistsInList(newPredecessors, secondPredecessor);
+	
+	// Current node holds all keys or first and second predecessors.
+	// All keys of first predecessor are SECONDARY on current node.
+	// All keys of second predecessor are TERTIARY on current node.
+    vector<pair<string, string>> keysOfFirstPredecessor = getAllKeys(SECONDARY);
+    vector<pair<string, string>> keysOfSecondPredecessor = getAllKeys(TERTIARY);
 
-                        msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, TERTIARY);
-                        emulNet->ENsend(&getMemberNode()->addr, new_replicas[1].getAddress(), msg->toString());
-                        free(msg);
-                    }
-                } else if (i == 1){
-                    // If this was the tertiary replica of the failed boss, then add both of your replicas
-                    // by sending create messages for all the keys of the bosses which have now become primary at this server.
-                    Message *msg;
-                    for (unsigned int k = 0; k < keys.size(); k++) {
-                        msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, SECONDARY);
-                        emulNet->ENsend(&getMemberNode()->addr, new_replicas[0].getAddress(), msg->toString());
-                        free(msg);
-                        msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, TERTIARY);
-                        emulNet->ENsend(&getMemberNode()->addr, new_replicas[1].getAddress(), msg->toString());
-                        free(msg);
-                    }
-                }
-            }
-        }
-    }
-}
+	if(firstPredecessorFailed){
+		// First predecessor failed.
+		// In this case, followig will be new replicas for first predecessor's keys.
+		// PRIMARY - current node -- this node already has keys as SECONDARY, so we just need to update.
+		// SECONDARY - first successor -- this node already has keys as TERTIARY, so we just need to update.
+		// TERTIARY - second successor -- this node does not have keys of second predecessor, therefore we will create.
+		for (unsigned int i = 0; i < newSuccessors.size(); i++) {
+			ReplicaType replicaType = i == 0 ? PRIMARY : (i == 1 ? SECONDARY : TERTIARY);
+			MessageType messageType = i <= 1 ? UPDATE : CREATE;
+			for (auto kvPair : keysOfFirstPredecessor) {
+				Message *msg = new Message(-1, myAddress, messageType, kvPair.first, kvPair.second, replicaType);
+				emulNet->ENsend(&myAddress, newSuccessors[i].getAddress(), msg->toString());
+				free(msg);
+			}
+		}
+	}
 
-/*
-* CPF: Check if some vector of nodes contain a given node.
-* */
-int MP2Node::ifExistNode(vector<Node> v, Node n1){
-    vector<Node>::iterator iterator1 = v.begin();
-    int i = 0;
-    while(iterator1 != v.end()){ // iterate over each node in the vector
-        if (areNodesSame(n1, *iterator1)) // if the nodes are same return the location otherwise return -1
-            return i;
-        iterator1++;
-        i++;
-    }
-    return -1;
+	if (firstPredecessorFailed && secondPredecessorFailed){
+		// Both first and second predecessors failed.
+		// In this case, followig will be new replicas for second predecessor's keys.
+		// PRIMARY - current node -- this node already has keys as TERTIARY, so we just need to update.
+		// SECONDARY - first successor -- this node does not have keys of second predecessor, therefore we will create.
+		// TERTIARY - second successor -- this node does not have keys of second predecessor, therefore we will create.
+		for (auto kvPair : keysOfSecondPredecessor) {
+			Message *msg = new Message(-1, myAddress, UPDATE, kvPair.first, kvPair.second, PRIMARY);
+			emulNet->ENsend(&myAddress, newSuccessors[0].getAddress(), msg->toString());
+			free(msg);
+
+			Message *msg1 = new Message(-1, myAddress, CREATE, kvPair.first, kvPair.second, SECONDARY);
+			emulNet->ENsend(&myAddress, newSuccessors[1].getAddress(), msg1->toString());
+			free(msg1);
+
+			Message *msg2 = new Message(-1, myAddress, CREATE, kvPair.first, kvPair.second, TERTIARY);
+			emulNet->ENsend(&myAddress, newSuccessors[2].getAddress(), msg2->toString());
+			free(msg2);
+		}
+	}
+	else if(secondPredecessorFailed){
+		// Only second predecessors failed.
+		// In this case, followig will be new replicas for second predecessor's keys.
+		// PRIMARY - first predecessor node -- this node already has keys as SECONDARY, so we just need to update them to PRIMARY.
+		// SECONDARY - current node -- this node already has keys as TERTIARY, so we just need to update them to SECONDARY.
+		// TERTIARY - first successor -- this node does not have keys of second predecessor, therefore we will create.
+		for (auto kvPair : keysOfSecondPredecessor) {
+			Message *msg = new Message(-1, myAddress, UPDATE, kvPair.first, kvPair.second, PRIMARY);
+			emulNet->ENsend(&myAddress, firstPredecessor.getAddress(), msg->toString());
+			free(msg);
+
+			Message *msg1 = new Message(-1, myAddress, UPDATE, kvPair.first, kvPair.second, SECONDARY);
+			emulNet->ENsend(&myAddress, newSuccessors[0].getAddress(), msg1->toString());
+			free(msg1);
+
+			Message *msg2 = new Message(-1, myAddress, CREATE, kvPair.first, kvPair.second, TERTIARY);
+			emulNet->ENsend(&myAddress, newSuccessors[1].getAddress(), msg2->toString());
+			free(msg2);
+		}
+	}
 }
 
 /**
@@ -667,17 +669,17 @@ bool MP2Node::nodeExistsInList(vector<Node> list, Node node){
 }
 
 /**
- * FUNCTION NAME: findMyKeys
+ * FUNCTION NAME: getAllKeys
  *
  * DESCRIPTION: CPF: Find specific type of keys (PRIMARY/ SECONDARY/ TERTIARY) at current server.
  */
-vector<pair<string, string>> MP2Node::findMyKeys(ReplicaType rep_type) {
+vector<pair<string, string>> MP2Node::getAllKeys(ReplicaType replicaType) {
     map<string, string>::iterator iterator1 = ht->hashTable.begin();
     vector<pair<string, string>> keys;
     Entry *temp_e;
     while (iterator1 != ht->hashTable.end()){ // Loop over all the keys in the hashtable and find the key that belong to the passed replica type
         temp_e = new Entry(iterator1->second);
-        if (temp_e->replica == rep_type){
+        if (temp_e->replica == replicaType){
             keys.push_back(pair<string, string>(iterator1->first, temp_e->value));
         }
         iterator1++;
