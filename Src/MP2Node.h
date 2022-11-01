@@ -23,6 +23,7 @@
 #include "Queue.h"
 
 #define REPLYTIMEOUT 4
+#define CUSTOMLOGENABLED 1
 
 /**
  * CLASS NAME: TransactionDetail
@@ -149,6 +150,8 @@ public:
 	int ifExistNode(vector<Node> v, Node n1);
 	void assignReplicationNodes();
 	bool nodeExistsInList(vector<Node> list, Node node);
+	void manageFailedSuccessors(vector<Node> new_replicas, Address myAddress);
+	void manageFailedPredecessors(vector<Node> new_bosses, vector<Node> new_replicas, Address myAddress);
 
 	~MP2Node();
 };

@@ -156,6 +156,12 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         log->LOG(&memberNode->addr, "Starting up group...");
 #endif
         memberNode->inGroup = true;
+
+        // Add initial node to it's own membership list.
+        int id = *(int*)(&memberNode->addr.addr);
+	    int port = *(short*)(&memberNode->addr.addr[4]);
+
+        addNodeToMemberList(id, port, memberNode->heartbeat, memberNode->timeOutCounter);
     }
     else {
         size_t msgsize = sizeof(MessageHdr) + sizeof(joinaddr->addr) + sizeof(long) + 1;

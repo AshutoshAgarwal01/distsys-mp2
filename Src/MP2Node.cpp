@@ -69,7 +69,7 @@ void MP2Node::updateRing() {
 
 	// If stablization is required run stablization protocol.
     if (change && !ht->isEmpty()){
-        // ring = curMemList;
+        ring = curMemList;
 		stabilizationProtocol();
 	}
 }
@@ -221,6 +221,17 @@ void MP2Node::propagateMessageFromClient(MessageType msgType, string key, string
 	// Find replica nodes for they key.
     vector<Node> replicaNodes = findNodes(key);
 
+	// TODO: Remove it when logging not needed.
+	if (CUSTOMLOGENABLED == 1){
+		string temp = "";
+		for (auto n : replicaNodes)
+		{
+			temp += ", " + n.getAddress()->getAddress();
+		}
+
+		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Sending read to servers: %s", temp.c_str());
+	}
+
 	// Should transaction id be tracked at client level or it should be at server level.
 	// if client level: then there will be 3 messages in network for each transaction id.
 	int transId = ++g_transID;
@@ -244,7 +255,9 @@ void MP2Node::propagateMessageFromClient(MessageType msgType, string key, string
 				return;
         }
 
-		// cout << "\nSending message: transId:  " << transId << " Key: " << key << " Val: " << value;
+		if (CUSTOMLOGENABLED == 1){
+			log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Sent read to server: %s", replica.getAddress()->getAddress().c_str());
+		}
         emulNet->ENsend(&currAddress, replica.getAddress(), msg->toString());
 
 		// TODO: free mes. Why?
@@ -459,10 +472,14 @@ void MP2Node::stabilizationProtocol() {
 	/*
 	 * Implement this
 	 */
-    cout << "In stablization " << endl;
+	if (CUSTOMLOGENABLED == 1){
+		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Performing stablization.");
+		// cout << "Performing stablization " << endl;
+	}
 
+	Address myAddress = getMemberNode()->addr;
     vector<Node> new_replicas, new_bosses;
-    Node this_node = Node(getMemberNode()->addr); // Current Node
+    Node this_node = Node(myAddress);
 
 	// Find new successors and predecessors.
 	// We are in this method, means that one or more of them will be different than current successors/ predecessors.
@@ -479,29 +496,67 @@ void MP2Node::stabilizationProtocol() {
 		}
 	}
 
-	Address myAddress = getMemberNode()->addr;
+	manageFailedSuccessors(new_replicas, myAddress);
+	manageFailedPredecessors(new_bosses, new_replicas, myAddress);
 
-    // Check new successors - if new successor is not same as current successor of the ring
-	// then we will need to transfer keys to new successor.
-    for (unsigned int i = 0; i < new_replicas.size(); i++) {
-        if (!areNodesSame(hasMyReplicas[i], new_replicas[i])) {
-            vector<pair<string, string>> keys = findMyKeys(PRIMARY);
+    // Now update the new replicas and bosses
+    hasMyReplicas  = new_replicas;
+    haveReplicasOf = new_bosses;
 
-			// 1. Tertiary successor failed: When new successor is not part of existing ones.
-			// 	  then create all primary keys present on current node to this new successor (mark it tertiary).
-			// 2. Secondary successor failed: When new successor is already part of existing ones.
-			// 	                then update new successor's ReplicaType to Secondary.
-			MessageType messageType = nodeExistsInList(hasMyReplicas, new_replicas[i]) ? UPDATE : CREATE;
+}
+
+// Manage failed successors.
+void MP2Node::manageFailedSuccessors(vector<Node> new_replicas, Address myAddress) {
+    vector<pair<string, string>> keys = findMyKeys(PRIMARY);
+	
+	string logMessage = "None";
+	bool secondaryFailed = !nodeExistsInList(new_replicas, hasMyReplicas[0]);
+	bool terFailed = !nodeExistsInList(new_replicas, hasMyReplicas[1]);
+
+	if (secondaryFailed && terFailed){
+		logMessage = "Both secondary and tertiary failed";
+		MessageType messageType = CREATE;
+		for (unsigned int i = 0; i < new_replicas.size(); i++) {
+			ReplicaType replicaType = i == 0 ? SECONDARY : TERTIARY;
 			for (unsigned int k = 0; k < keys.size(); k++) {
-				Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, static_cast<ReplicaType>(i + 1));
+				Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, replicaType);
 				emulNet->ENsend(&myAddress, new_replicas[i].getAddress(), msg->toString());
 				free(msg);
 			}
-        }
-    }
+		}
+	}
+	else if (secondaryFailed){
+		logMessage = "Only secondary failed";
+		for (unsigned int i = 0; i < new_replicas.size(); i++) {
+			ReplicaType replicaType = i == 0 ? SECONDARY : TERTIARY;
+			MessageType messageType = i == 0 ? UPDATE : CREATE;
+			for (unsigned int k = 0; k < keys.size(); k++) {
+				Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, replicaType);
+				emulNet->ENsend(&myAddress, new_replicas[i].getAddress(), msg->toString());
+				free(msg);
+			}
+		}
+	}
+	else if (terFailed){
+		logMessage = "Only tertiary failed";
+		ReplicaType replicaType = TERTIARY;
+		MessageType messageType = CREATE;
+		for (unsigned int k = 0; k < keys.size(); k++) {
+			Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, replicaType);
+			emulNet->ENsend(&myAddress, new_replicas[1].getAddress(), msg->toString());
+			free(msg);
+		}
+	}
+	
+	if (CUSTOMLOGENABLED == 1){
+		logMessage = "CUSTOMLOG: Inside manageFailedSuccessors: " + logMessage;
+		log->LOG(&getMemberNode()->addr, logMessage.c_str());
+	}
+}
 
-    // check for my bosses if they failed
-
+// Manage failed predecessors.
+void MP2Node::manageFailedPredecessors(vector<Node> new_bosses, vector<Node> new_replicas, Address myAddress) {
+	// check for my bosses if they failed
     for (unsigned int i = 0; i < haveReplicasOf.size(); i++) {
         if (areNodesSame(haveReplicasOf[i], new_bosses[i])) {
             break; // if the boss is same and at same location, then break because boss will take care of its boss and will also correct this nodes replica type if necessary as is shown below.
@@ -551,11 +606,6 @@ void MP2Node::stabilizationProtocol() {
             }
         }
     }
-
-    // Now update the new replicas and bosses
-    hasMyReplicas  = new_replicas;
-    haveReplicasOf = new_bosses;
-
 }
 
 /*
@@ -575,12 +625,11 @@ int MP2Node::ifExistNode(vector<Node> v, Node n1){
 
 // Check if node exists in vector of nodes.
 bool MP2Node::nodeExistsInList(vector<Node> list, Node node){
-    vector<Node>::iterator it = list.begin();
-    while(it != list.end()){
-        if (areNodesSame(node, *it))
-            return true;
-        it++;
-    }
+	for (auto i : list){
+		if (areNodesSame(node, i))
+			return true;
+	}
+
     return false;
 }
 
@@ -797,7 +846,7 @@ void MP2Node::checkAwaitedTransactions()
 	vector<int> deleteTransIds;
 
 	for (pair<int, TransactionDetail> i: this->activeTransactions){
-		// int currTime = par->getcurrtime();
+		int currTime = par->getcurrtime();
 		int transId = i.first;
 		TransactionDetail transDetail = i.second;
 
@@ -806,8 +855,12 @@ void MP2Node::checkAwaitedTransactions()
 		if (transDetail.successCount >= 2){
 			result = 1;
 		}
-		// else if (currTime - transDetail.timeSent > REPLYTIMEOUT || transDetail.failureCount >= 2){
-		else if (transDetail.failureCount >= 2){
+		else if (currTime - transDetail.timeSent > REPLYTIMEOUT || transDetail.failureCount >= 2){
+		// else if (transDetail.failureCount >= 2){
+			if (currTime - transDetail.timeSent > REPLYTIMEOUT && CUSTOMLOGENABLED == 1)
+			{
+				log->LOG(&myAddress, "CUSTOMLOG: Timeout.");				
+			}
 			result = 0;
 		}
 
@@ -876,8 +929,15 @@ void MP2Node::assignReplicationNodes() {
                 hasMyReplicas.push_back(ring[(i + 1) % ring.size()]);
                 hasMyReplicas.push_back(ring[(i + 2) % ring.size()]);
 
+				if (CUSTOMLOGENABLED == 1){
+					log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Initialized hasMyReplicas.");
+				}
 				return;
             }
         }
     }
+
+	if (CUSTOMLOGENABLED == 1){
+		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Could not initialize hasMyReplicas.");
+	}
 }
