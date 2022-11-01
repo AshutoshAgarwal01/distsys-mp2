@@ -408,17 +408,16 @@ void MP2Node::stabilizationProtocol() {
 			newSuccessors.push_back(ring[(i + 1) % ring.size()]);
 			newSuccessors.push_back(ring[(i + 2) % ring.size()]);
 
-			break;
+			manageFailedSuccessors(newSuccessors, myAddress);
+			manageFailedPredecessors(newPredecessors, newSuccessors, myAddress);
+
+			// Now update the new replicas and bosses
+			hasMyReplicas  = newSuccessors;
+			haveReplicasOf = newPredecessors;
+
+			return;
 		}
 	}
-
-	manageFailedSuccessors(newSuccessors, myAddress);
-	manageFailedPredecessors(newPredecessors, newSuccessors, myAddress);
-
-    // Now update the new replicas and bosses
-    hasMyReplicas  = newSuccessors;
-    haveReplicasOf = newPredecessors;
-
 }
 
 /************** New functions ***************/
