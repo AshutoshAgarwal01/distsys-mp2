@@ -54,63 +54,25 @@ void MP2Node::updateRing() {
 	// Sort the list based on the hashCode
 	sort(curMemList.begin(), curMemList.end());
 
-	/*
-	 * Step 3: Run the stabilization protocol IF REQUIRED
-	 */
-	// Run stabilization protocol if the hash table size is greater than zero and if there has been a changed in the ring
-	change = isMembershipStale(curMemList);
+	change = isRingStale(curMemList);
     if (ring.empty() || change){
         ring = curMemList;
 	}
 
     if (hasMyReplicas.empty() || haveReplicasOf.empty()){
-        assignReplicationNodes();
+        initializeSuccessorAndPredecessorNodes();
 	}
+
+	/*
+	 * Step 3: Run the stabilization protocol IF REQUIRED
+	 */
+	// Run stabilization protocol if the hash table size is greater than zero and if there has been a changed in the ring
 
 	// If stablization is required run stablization protocol.
     if (change && !ht->isEmpty()){
         ring = curMemList;
 		stabilizationProtocol();
 	}
-}
-
-/**
-* FUNCTION NAME: isStablizationRequired
-*
-* DESCRIPTION: Checks if stabilaization is required.
-*/
-bool MP2Node::isMembershipStale(vector<Node> currentMembershipList) {
-	// If ring is empty then stabilization is not needed.
-	if (ring.empty()){
-		return false;
-	}
-
-	// If current membership list is not same as current ring, then we need stabilization.
-	if (ring.size() != currentMembershipList.size()){
-		return true;
-	}
-
-	// If any node in current membership list and ring are different, then we need stabilization.
-	for (unsigned int i = 0; i < currentMembershipList.size(); i++) {
-		if (!areNodesSame(currentMembershipList[i], ring[i])){
-			return true;
-		}
-	}
-
-    return false;
-}
-
-/**
- * FUNCTION NAME: areNodesSame
- *
- * DESCRIPTION: Checks if two nodes are same. This is done by comparing addresses.
- */
-bool MP2Node::areNodesSame(Node node1, Node node2) {
-    if (memcmp(node1.getAddress()->addr, node2.getAddress()->addr, sizeof(Address)) == 0){
-        return true;
-	}
-
-    return false;
 }
 
 /**
@@ -166,7 +128,7 @@ void MP2Node::clientCreate(string key, string value) {
 	* Implement this
 	*/
 
-	propagateMessageFromClient(CREATE, key, value);
+	propagateMessageFromClientToReplicas(CREATE, key, value);
 }
 
 /**
@@ -182,7 +144,7 @@ void MP2Node::clientRead(string key){
 	/*
 	* Implement this
 	*/
-	propagateMessageFromClient(READ, key, "");
+	propagateMessageFromClientToReplicas(READ, key, "");
 }
 
 /**
@@ -198,7 +160,7 @@ void MP2Node::clientUpdate(string key, string value){
 	/*
     * Implement this
     */
-	propagateMessageFromClient(UPDATE, key, value);
+	propagateMessageFromClientToReplicas(UPDATE, key, value);
 }
 
 /**
@@ -214,57 +176,7 @@ void MP2Node::clientDelete(string key){
 	/*
 	* Implement this
 	*/
-	propagateMessageFromClient(DELETE, key, "");
-}
-
-void MP2Node::propagateMessageFromClient(MessageType msgType, string key, string value) {
-	// Find replica nodes for they key.
-    vector<Node> replicaNodes = findNodes(key);
-
-	// TODO: Remove it when logging not needed.
-	if (CUSTOMLOGENABLED == 1){
-		string temp = "";
-		for (auto n : replicaNodes)
-		{
-			temp += ", " + n.getAddress()->getAddress();
-		}
-
-		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Sending read to servers: %s", temp.c_str());
-	}
-
-	// Should transaction id be tracked at client level or it should be at server level.
-	// if client level: then there will be 3 messages in network for each transaction id.
-	int transId = ++g_transID;
-	for (unsigned int i = 0; i < replicaNodes.size(); i++){
-		Node replica = replicaNodes.at(i);
-		Address currAddress = getMemberNode()->addr;
-
-		ReplicaType replicaType = i == 0 ? PRIMARY : (i == 1 ? SECONDARY : TERTIARY);
-		Message *msg;
-        switch(msgType)
-		{
-            case CREATE:
-			case UPDATE:
-				msg = new Message(transId, currAddress, msgType, key, value, replicaType);
-				break;
-            case READ:
-            case DELETE:
-				msg = new Message(transId, currAddress, msgType, key);
-				break;
-            default:
-				return;
-        }
-
-		if (CUSTOMLOGENABLED == 1){
-			log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Sent read to server: %s", replica.getAddress()->getAddress().c_str());
-		}
-        emulNet->ENsend(&currAddress, replica.getAddress(), msg->toString());
-
-		// TODO: free mes. Why?
-	}
-
-	// Add details of this transaction to active transactionList.
-	addActiveTransaction(transId, msgType, key, value, replicaNodes.size());
+	propagateMessageFromClientToReplicas(DELETE, key, "");
 }
 
 /**
@@ -378,7 +290,12 @@ void MP2Node::checkMessages() {
             case READ:
 				handleReadMessage(receivedMessage);
 				break;
-            case REPLY:
+            /* case REPLY:
+            case READREPLY:
+ 				// TODO: Check why tests are failing if this method is used.
+				handleMessageAtCoordinator(receivedMessage, receivedMessage.type);
+				break; */
+			case REPLY:
 				handleReplyMessage(receivedMessage);
 				break;
             case READREPLY:
@@ -394,7 +311,7 @@ void MP2Node::checkMessages() {
 				break;
         }
 
-		checkAwaitedTransactions();
+		checkAwaitedTransactionsAtCoordinator();
 	}
 
 	/*
@@ -505,7 +422,111 @@ void MP2Node::stabilizationProtocol() {
 
 }
 
-// Manage failed successors.
+/************** New functions ***************/
+
+/**
+* FUNCTION NAME: propagateMessageFromClientToReplicas
+*
+* DESCRIPTION: Propagates CRUD message from client to the replica nodes.
+	We send messages to PRIMARY, SECONDARY and TERTIARY nodes.
+	Note that PRIMARY node is the current node.
+*/
+void MP2Node::propagateMessageFromClientToReplicas(MessageType msgType, string key, string value) {
+	// Find replica nodes for they key.
+    vector<Node> replicaNodes = findNodes(key);
+
+	// TODO: Remove it when logging not needed.
+	if (CUSTOMLOGENABLED == 1){
+		string temp = "";
+		for (auto n : replicaNodes)
+		{
+			temp += ", " + n.getAddress()->getAddress();
+		}
+
+		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Sending read to servers: %s", temp.c_str());
+	}
+
+	// Should transaction id be tracked at client level or it should be at server level.
+	// if client level: then there will be 3 messages in network for each transaction id.
+	int transId = ++g_transID;
+	for (unsigned int i = 0; i < replicaNodes.size(); i++){
+		Node replica = replicaNodes.at(i);
+		Address currAddress = getMemberNode()->addr;
+
+		ReplicaType replicaType = i == 0 ? PRIMARY : (i == 1 ? SECONDARY : TERTIARY);
+		Message *msg;
+        switch(msgType)
+		{
+            case CREATE:
+			case UPDATE:
+				msg = new Message(transId, currAddress, msgType, key, value, replicaType);
+				break;
+            case READ:
+            case DELETE:
+				msg = new Message(transId, currAddress, msgType, key);
+				break;
+            default:
+				return;
+        }
+
+		if (CUSTOMLOGENABLED == 1){
+			log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Sent read to server: %s", replica.getAddress()->getAddress().c_str());
+		}
+        emulNet->ENsend(&currAddress, replica.getAddress(), msg->toString());
+
+		// TODO: free mes. Why?
+		free(msg);
+	}
+
+	// Add details of this transaction to active transactionList.
+	addActiveTransaction(transId, msgType, key, value, replicaNodes.size());
+}
+
+/**
+* FUNCTION NAME: isRingStale
+*
+* DESCRIPTION: Checks if ring at current node is stale.
+*/
+bool MP2Node::isRingStale(vector<Node> currentMembershipList) {
+	if (ring.empty()){
+		return false;
+	}
+
+	// Ring is stale if current membership list is not same as current ring.
+	if (ring.size() != currentMembershipList.size()){
+		return true;
+	}
+
+	// Ring is stale if any node in current membership list and ring are different.
+	for (unsigned int i = 0; i < currentMembershipList.size(); i++) {
+		if (!areNodesSame(currentMembershipList[i], ring[i])){
+			return true;
+		}
+	}
+
+    return false;
+}
+
+/**
+ * FUNCTION NAME: areNodesSame
+ *
+ * DESCRIPTION: Checks if two nodes are same. This is done by comparing addresses.
+ */
+bool MP2Node::areNodesSame(Node node1, Node node2) {
+    if (memcmp(node1.getAddress()->addr, node2.getAddress()->addr, sizeof(Address)) == 0){
+        return true;
+	}
+
+    return false;
+}
+
+/**
+ * FUNCTION NAME: manageFailedSuccessors
+ *
+ * DESCRIPTION: This method manages failed successors.
+ * 1. Identify failed successor(s). SECONDART/ TERTIARY.
+ * 2. Replicate keys from current node (PRIMARY) to failed successors.
+ */
 void MP2Node::manageFailedSuccessors(vector<Node> new_replicas, Address myAddress) {
     vector<pair<string, string>> keys = findMyKeys(PRIMARY);
 	
@@ -554,7 +575,14 @@ void MP2Node::manageFailedSuccessors(vector<Node> new_replicas, Address myAddres
 	}
 }
 
-// Manage failed predecessors.
+/**
+ * FUNCTION NAME: manageFailedPredecessors
+ *
+ * DESCRIPTION: This method manages failed predecessors.
+ * 1. Identify failed predecessor(s).
+ * 2. Locate new PRIMARY/ secondary and tertiary replicas for this failed one.
+ * 3. Replicate all PRIMARY keys to newly identified replicas.
+ */
 void MP2Node::manageFailedPredecessors(vector<Node> new_bosses, vector<Node> new_replicas, Address myAddress) {
 	// check for my bosses if they failed
     for (unsigned int i = 0; i < haveReplicasOf.size(); i++) {
@@ -623,7 +651,12 @@ int MP2Node::ifExistNode(vector<Node> v, Node n1){
     return -1;
 }
 
-// Check if node exists in vector of nodes.
+/**
+ * FUNCTION NAME: nodeExistsInList
+ *
+ * DESCRIPTION: Check if node exists in vector of nodes.
+ * returns true - if the node exists in the list of given nodes, else false.
+ */
 bool MP2Node::nodeExistsInList(vector<Node> list, Node node){
 	for (auto i : list){
 		if (areNodesSame(node, i))
@@ -633,7 +666,11 @@ bool MP2Node::nodeExistsInList(vector<Node> list, Node node){
     return false;
 }
 
-// CPF: Find Keys at this server that are residing here as of specific replica type.
+/**
+ * FUNCTION NAME: findMyKeys
+ *
+ * DESCRIPTION: CPF: Find specific type of keys (PRIMARY/ SECONDARY/ TERTIARY) at current server.
+ */
 vector<pair<string, string>> MP2Node::findMyKeys(ReplicaType rep_type) {
     map<string, string>::iterator iterator1 = ht->hashTable.begin();
     vector<pair<string, string>> keys;
@@ -649,6 +686,14 @@ vector<pair<string, string>> MP2Node::findMyKeys(ReplicaType rep_type) {
     return keys; // return vector of pair of keys and values.
 }
 
+/**
+ * FUNCTION NAME: handleCreateMessage
+ *
+ * DESCRIPTION: Handles CREATE message at server.
+ * 1. Creates key at server.
+ * 2. Returns REPY message to sender.
+ * 3. Logs success or failure depending on result of create operation.
+ */
 void MP2Node::handleCreateMessage(Message message)
 {
 	// TODO: Should we update transMap here? what is need of this map anyways?
@@ -679,6 +724,14 @@ void MP2Node::handleCreateMessage(Message message)
 	}
 }
 
+/**
+ * FUNCTION NAME: handleReadMessage
+ *
+ * DESCRIPTION: Handles READ message at server.
+ * 1. Reads key at server.
+ * 2. Returns READREPLY message to sender.
+ * 3. Logs success or failure depending on result of read operation.
+ */
 void MP2Node::handleReadMessage(Message message)
 {
 	// TODO: Should we update transMap here? what is need of this map anyways?
@@ -710,34 +763,14 @@ void MP2Node::handleReadMessage(Message message)
 	}
 }
 
-void MP2Node::handleReadReplyMessage(Message message)
-{
-	int transId = message.transID;
-	if (this->activeTransactions.find(transId) == this->activeTransactions.end()) {
-		// We are here when transId is not present in activeTransactions.
-		// This happens only when we explicitly remove transId in checkAwaitedTransactions method.
-		// We have received a reply for which we already passed/ failed transaction.
-		// See logic in checkAwaitedTransactions for details.
-		return;
-	}
-
-	// Address myAddress = getMemberNode()->addr;
-    Address senderAddress(message.fromAddr);
-
-	// If message's value is not empty then message was successful.
-	bool isSuccess = !message.value.empty();
-
-	this->activeTransactions[transId].replyCount++;
-
-	if (isSuccess){
-		this->activeTransactions[transId].value = message.value;
-		this->activeTransactions[transId].successCount++;
-	}
-	else{
-		this->activeTransactions[transId].failureCount++;
-	}
-}
-
+/**
+ * FUNCTION NAME: handleDeleteMessage
+ *
+ * DESCRIPTION: Handles DELETE message at server.
+ * 1. Deletes key at server.
+ * 2. Returns REPLY message to sender.
+ * 3. Logs success or failure depending on result of delete operation.
+ */
 void MP2Node::handleDeleteMessage(Message message)
 {
 	// TODO: Should we update transMap here? what is need of this map anyways?
@@ -768,6 +801,14 @@ void MP2Node::handleDeleteMessage(Message message)
 	}
 }
 
+/**
+ * FUNCTION NAME: handleUpdateMessage
+ *
+ * DESCRIPTION: Handles UPDATE message at server.
+ * 1. Updates key at server.
+ * 2. Returns REPLY message to sender.
+ * 3. Logs success or failure depending on result of update operation.
+ */
 void MP2Node::handleUpdateMessage(Message message)
 {
 	// TODO: Should we update transMap here? what is need of this map anyways?
@@ -797,20 +838,25 @@ void MP2Node::handleUpdateMessage(Message message)
 	}
 }
 
-// REPLY message is sent by replicas for create/ update or delete operation.
-// This message is handled only at coordinator.
+/**
+ * FUNCTION NAME: handleReplyMessage
+ *
+ * DESCRIPTION: Handles REPLY message at coordinator.
+ * REPLY message is sent by replicas for CREATE/ DELETE/ UPDATE operations.
+ * REPLY message is handled only at coordinator.
+ * 1. Updates replyCount, successCount/ failureCount of transaction for which REPLY is received.
+ */
 void MP2Node::handleReplyMessage(Message message)
 {
 	int transId = message.transID;
 	if (this->activeTransactions.find(transId) == this->activeTransactions.end()) {
 		// We are here when transId is not present in activeTransactions.
-		// This happens only when we explicitly remove transId in checkAwaitedTransactions method.
+		// This happens only when we explicitly remove transId in checkAwaitedTransactionsAtCoordinator method.
 		// We have received a reply for which we already passed/ failed transaction.
-		// See logic in checkAwaitedTransactions for details.
+		// See logic in checkAwaitedTransactionsAtCoordinator for details.
 		return;
 	}
 
-	// Address myAddress = getMemberNode()->addr;
     Address senderAddress(message.fromAddr);
 	bool isSuccess = message.success;
 
@@ -824,6 +870,49 @@ void MP2Node::handleReplyMessage(Message message)
 	}
 }
 
+/**
+ * FUNCTION NAME: handleReadReplyMessage
+ *
+ * DESCRIPTION: Handles READREPLY message at coordinator.
+ * READREPLY message is sent by replicas for READ operations.
+ * READREPLY message is handled only at coordinator.
+ * 1. Updates replyCount, successCount/ failureCount of transaction for which REPLY is received.
+ */
+void MP2Node::handleReadReplyMessage(Message message)
+{
+	int transId = message.transID;
+	if (this->activeTransactions.find(transId) == this->activeTransactions.end()) {
+		// We are here when transId is not present in activeTransactions.
+		// This happens only when we explicitly remove transId in checkAwaitedTransactionsAtCoordinator method.
+		// We have received a reply for which we already passed/ failed transaction.
+		// See logic in checkAwaitedTransactionsAtCoordinator for details.
+		return;
+	}
+
+	// Address myAddress = getMemberNode()->addr;
+    Address senderAddress(message.fromAddr);
+
+	// If message's value is not empty then message was successful.
+	bool isSuccess = !message.value.empty();
+
+	this->activeTransactions[transId].replyCount++;
+
+	if (isSuccess){
+		this->activeTransactions[transId].value = message.value;
+		this->activeTransactions[transId].successCount++;
+	}
+	else{
+		this->activeTransactions[transId].failureCount++;
+	}
+}
+
+/**
+ * FUNCTION NAME: addActiveTransaction
+ *
+ * DESCRIPTION: Adds a transaction to list of active transactions at current node (coordinator).
+ * Note that each node is server and coordinator (client) both.
+ * List of active transactions is list of transactions initiated by client/ coordinator.
+ */
 void MP2Node::addActiveTransaction(int transId, MessageType messageType, string key, string value, int sentToCount)
 {
 	TransactionDetail transactionDetail;
@@ -839,7 +928,15 @@ void MP2Node::addActiveTransaction(int transId, MessageType messageType, string 
 	this->activeTransactions.insert(pair<int, TransactionDetail>(transId, transactionDetail));
 }
 
-void MP2Node::checkAwaitedTransactions()
+/**
+ * FUNCTION NAME: checkAwaitedTransactionsAtCoordinator
+ *
+ * DESCRIPTION: Check all active transactions at coordinator and update their statuses.
+ * 1. Log success/ failure messages for CRUD transactions at coordinator.
+ * 2. Fail a transaction if it is timedout.
+ * 3. Remove all successful/ failed trandactions from list of active transactions.
+ */
+void MP2Node::checkAwaitedTransactionsAtCoordinator()
 {
 	Address myAddress = getMemberNode()->addr;
 
@@ -856,7 +953,6 @@ void MP2Node::checkAwaitedTransactions()
 			result = 1;
 		}
 		else if (currTime - transDetail.timeSent > REPLYTIMEOUT || transDetail.failureCount >= 2){
-		// else if (transDetail.failureCount >= 2){
 			if (currTime - transDetail.timeSent > REPLYTIMEOUT && CUSTOMLOGENABLED == 1)
 			{
 				log->LOG(&myAddress, "CUSTOMLOG: Timeout.");				
@@ -914,11 +1010,11 @@ void MP2Node::checkAwaitedTransactions()
 }
 
 /**
-*
-* CPF: Assign successors and predecessors to this node i.e. change hasMyReplicas and haveReplicasOf
-*
-*/
-void MP2Node::assignReplicationNodes() {
+ * FUNCTION NAME: initializeSuccessorAndPredecessorNodes
+ *
+ * DESCRIPTION: Initializes successors and predecessors at each node.
+ */
+void MP2Node::initializeSuccessorAndPredecessorNodes() {
     Node currentNode = Node(getMemberNode()->addr);
     if (hasMyReplicas.empty() || haveReplicasOf.empty()) {
         for (unsigned int i = 0; i < ring.size(); i++) {
@@ -939,5 +1035,52 @@ void MP2Node::assignReplicationNodes() {
 
 	if (CUSTOMLOGENABLED == 1){
 		log->LOG(&getMemberNode()->addr, "CUSTOMLOG: Could not initialize hasMyReplicas.");
+	}
+}
+
+/**
+ * FUNCTION NAME: handleMessageAtCoordinator
+ * TODO: Check why tests are failing if this method is used.
+ *
+ * DESCRIPTION: Handles incoming messages at coordinator.
+ * Coordinator will get REPLY and READREPLY messages only
+ * 1. Updates replyCount, successCount/ failureCount of transaction for which REPLY/ READREPLY is received.
+ */
+void MP2Node::handleMessageAtCoordinator(Message message, MessageType messageType)
+{
+	int transId = message.transID;
+	if (this->activeTransactions.find(transId) == this->activeTransactions.end()) {
+		// We are here when transId is not present in activeTransactions.
+		// This happens only when we explicitly remove transId in checkAwaitedTransactions method.
+		// We have received a reply for which we already passed/ failed transaction.
+		// See logic in checkAwaitedTransactions for details.
+		return;
+	}
+
+    Address senderAddress(message.fromAddr);
+	bool isSuccess = false;
+	if (messageType == REPLY){
+		isSuccess = message.success;
+	}
+	else if (messageType == READREPLY){
+		isSuccess = !message.value.empty();
+	}
+	else{
+		string err = "Message type '" +  to_string(messageType) + "' not supported at coordinator.";
+		if (CUSTOMLOGENABLED == 1){
+			Address myAddress = getMemberNode()->addr;
+			log->LOG(&myAddress, err.c_str());
+		}
+
+		throw std::invalid_argument("Message type '" +  to_string(messageType) + "' not supported at coordinator.");
+	}
+
+	this->activeTransactions[transId].replyCount++;
+
+	if (isSuccess){
+		this->activeTransactions[transId].successCount++;
+	}
+	else{
+		this->activeTransactions[transId].failureCount++;
 	}
 }

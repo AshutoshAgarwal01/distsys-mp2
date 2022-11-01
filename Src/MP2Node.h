@@ -141,14 +141,15 @@ public:
     void handleReadReplyMessage(Message message);
     void handleDeleteMessage(Message message);
     void handleUpdateMessage(Message message);
+	void handleMessageAtCoordinator(Message message, MessageType messageType);
 	void addActiveTransaction(int transId, MessageType messageType, string key, string value, int sentToCount);
-	void checkAwaitedTransactions();
-	void propagateMessageFromClient(MessageType msgType, string key, string value);
-	bool isMembershipStale(vector<Node> currentMembershipList);
+	void checkAwaitedTransactionsAtCoordinator();
+	void propagateMessageFromClientToReplicas(MessageType msgType, string key, string value);
+	bool isRingStale(vector<Node> currentMembershipList);
 	bool areNodesSame(Node node1, Node node2);
 	vector<pair<string, string>> findMyKeys(ReplicaType rep_type);
 	int ifExistNode(vector<Node> v, Node n1);
-	void assignReplicationNodes();
+	void initializeSuccessorAndPredecessorNodes();
 	bool nodeExistsInList(vector<Node> list, Node node);
 	void manageFailedSuccessors(vector<Node> new_replicas, Address myAddress);
 	void manageFailedPredecessors(vector<Node> new_bosses, vector<Node> new_replicas, Address myAddress);
@@ -156,4 +157,4 @@ public:
 	~MP2Node();
 };
 
-#endif /* MP2NODE_H_ */
+#endif /* MP2NODE_H_ */	
