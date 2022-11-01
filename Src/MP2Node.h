@@ -22,6 +22,42 @@
 #include "Message.h"
 #include "Queue.h"
 
+#define REPLYTIMEOUT 4
+
+/**
+ * CLASS NAME: TransactionDetail
+ *
+ * DESCRIPTION: This class encapsulates details of a transaction.
+ */
+struct TransactionDetail {
+	// Transaction id.
+	int transId;
+
+	// Count of nodes where this transaction was sent.
+	int sentNodeCount;
+
+	// Count of replies received so far.
+	int replyCount;
+
+	// Count of success replies so far.
+	int successCount;
+
+	// Count of failed replies so far.
+	int failureCount;
+
+	// Time at which message was sent.
+	int timeSent;
+
+	// Type of message related to this transaction.
+	MessageType messageType;
+
+	// Key.
+	string key;
+
+	// value.
+	string value;
+};
+
 /**
  * CLASS NAME: MP2Node
  *
@@ -53,7 +89,10 @@ private:
 	// string delimiter
 	string delimiter;
 	// Transaction map
-	map<int, Message>transMap;
+	map<int, Message> transMap;
+
+	// Active transactions at this coordinator.
+	map<int, TransactionDetail> activeTransactions;
 
 public:
 	MP2Node(Member *memberNode, Params *par, EmulNet *emulNet, Log *log, Address *addressOfMember);
@@ -94,6 +133,23 @@ public:
 	// stabilization protocol - handle multiple failures
 	void stabilizationProtocol();
 	
+	// Methods to handle different type of messages.
+    void handleCreateMessage(Message message);
+    void handleReadMessage(Message message);
+    void handleReplyMessage(Message message);
+    void handleReadReplyMessage(Message message);
+    void handleDeleteMessage(Message message);
+    void handleUpdateMessage(Message message);
+	void addActiveTransaction(int transId, MessageType messageType, string key, string value, int sentToCount);
+	void checkAwaitedTransactions();
+	void propagateMessageFromClient(MessageType msgType, string key, string value);
+	bool isMembershipStale(vector<Node> currentMembershipList);
+	bool areNodesSame(Node node1, Node node2);
+	vector<pair<string, string>> findMyKeys(ReplicaType rep_type);
+	int ifExistNode(vector<Node> v, Node n1);
+	void assignReplicationNodes();
+	bool nodeExistsInList(vector<Node> list, Node node);
+
 	~MP2Node();
 };
 

@@ -54,11 +54,63 @@ void MP2Node::updateRing() {
 	// Sort the list based on the hashCode
 	sort(curMemList.begin(), curMemList.end());
 
-
 	/*
 	 * Step 3: Run the stabilization protocol IF REQUIRED
 	 */
 	// Run stabilization protocol if the hash table size is greater than zero and if there has been a changed in the ring
+	change = isMembershipStale(curMemList);
+    if (ring.empty() || change){
+        ring = curMemList;
+	}
+
+    if (hasMyReplicas.empty() || haveReplicasOf.empty()){
+        assignReplicationNodes();
+	}
+
+	// If stablization is required run stablization protocol.
+    if (change && !ht->isEmpty()){
+        // ring = curMemList;
+		stabilizationProtocol();
+	}
+}
+
+/**
+* FUNCTION NAME: isStablizationRequired
+*
+* DESCRIPTION: Checks if stabilaization is required.
+*/
+bool MP2Node::isMembershipStale(vector<Node> currentMembershipList) {
+	// If ring is empty then stabilization is not needed.
+	if (ring.empty()){
+		return false;
+	}
+
+	// If current membership list is not same as current ring, then we need stabilization.
+	if (ring.size() != currentMembershipList.size()){
+		return true;
+	}
+
+	// If any node in current membership list and ring are different, then we need stabilization.
+	for (unsigned int i = 0; i < currentMembershipList.size(); i++) {
+		if (!areNodesSame(currentMembershipList[i], ring[i])){
+			return true;
+		}
+	}
+
+    return false;
+}
+
+/**
+ * FUNCTION NAME: areNodesSame
+ *
+ * DESCRIPTION: Checks if two nodes are same. This is done by comparing addresses.
+ */
+bool MP2Node::areNodesSame(Node node1, Node node2) {
+    if (memcmp(node1.getAddress()->addr, node2.getAddress()->addr, sizeof(Address)) == 0){
+        return true;
+	}
+
+    return false;
 }
 
 /**
@@ -113,6 +165,8 @@ void MP2Node::clientCreate(string key, string value) {
 	/*
 	* Implement this
 	*/
+
+	propagateMessageFromClient(CREATE, key, value);
 }
 
 /**
@@ -128,6 +182,7 @@ void MP2Node::clientRead(string key){
 	/*
 	* Implement this
 	*/
+	propagateMessageFromClient(READ, key, "");
 }
 
 /**
@@ -143,6 +198,7 @@ void MP2Node::clientUpdate(string key, string value){
 	/*
     * Implement this
     */
+	propagateMessageFromClient(UPDATE, key, value);
 }
 
 /**
@@ -158,6 +214,44 @@ void MP2Node::clientDelete(string key){
 	/*
 	* Implement this
 	*/
+	propagateMessageFromClient(DELETE, key, "");
+}
+
+void MP2Node::propagateMessageFromClient(MessageType msgType, string key, string value) {
+	// Find replica nodes for they key.
+    vector<Node> replicaNodes = findNodes(key);
+
+	// Should transaction id be tracked at client level or it should be at server level.
+	// if client level: then there will be 3 messages in network for each transaction id.
+	int transId = ++g_transID;
+	for (unsigned int i = 0; i < replicaNodes.size(); i++){
+		Node replica = replicaNodes.at(i);
+		Address currAddress = getMemberNode()->addr;
+
+		ReplicaType replicaType = i == 0 ? PRIMARY : (i == 1 ? SECONDARY : TERTIARY);
+		Message *msg;
+        switch(msgType)
+		{
+            case CREATE:
+			case UPDATE:
+				msg = new Message(transId, currAddress, msgType, key, value, replicaType);
+				break;
+            case READ:
+            case DELETE:
+				msg = new Message(transId, currAddress, msgType, key);
+				break;
+            default:
+				return;
+        }
+
+		// cout << "\nSending message: transId:  " << transId << " Key: " << key << " Val: " << value;
+        emulNet->ENsend(&currAddress, replica.getAddress(), msg->toString());
+
+		// TODO: free mes. Why?
+	}
+
+	// Add details of this transaction to active transactionList.
+	addActiveTransaction(transId, msgType, key, value, replicaNodes.size());
 }
 
 /**
@@ -173,6 +267,8 @@ bool MP2Node::createKeyValue(string key, string value, ReplicaType replica) {
 	 * Implement this
 	 */
 	// Insert key, value, replicaType into the hash table
+	Entry e(value, par->getcurrtime(), replica);
+    return ht->create(key, e.convertToString());
 }
 
 /**
@@ -188,6 +284,7 @@ string MP2Node::readKey(string key) {
 	 * Implement this
 	 */
 	// Read key from local hash table and return value
+	return ht->read(key);
 }
 
 /**
@@ -203,6 +300,9 @@ bool MP2Node::updateKeyValue(string key, string value, ReplicaType replica) {
 	 * Implement this
 	 */
 	// Update key in local hash table and return true or false
+	// return ht->update(key, value);
+	Entry e(value, par->getcurrtime(), replica);
+	return ht->update(key, e.convertToString());
 }
 
 /**
@@ -218,6 +318,7 @@ bool MP2Node::deletekey(string key) {
 	 * Implement this
 	 */
 	// Delete the key from the local hash table
+	return ht->deleteKey(key);
 }
 
 /**
@@ -253,6 +354,34 @@ void MP2Node::checkMessages() {
 		/*
 		 * Handle the message types here
 		 */
+
+		// Convert message string to Message type so that we can access properties.
+		Message receivedMessage(message);
+        switch(receivedMessage.type)
+		{
+            case CREATE:
+				handleCreateMessage(receivedMessage);
+				break;
+            case READ:
+				handleReadMessage(receivedMessage);
+				break;
+            case REPLY:
+				handleReplyMessage(receivedMessage);
+				break;
+            case READREPLY:
+				handleReadReplyMessage(receivedMessage);
+				break;
+            case DELETE:
+				handleDeleteMessage(receivedMessage);
+				break;
+            case UPDATE:
+				handleUpdateMessage(receivedMessage);
+				break;
+            default:
+				break;
+        }
+
+		checkAwaitedTransactions();
 	}
 
 	/*
@@ -328,6 +457,427 @@ int MP2Node::enqueueWrapper(void *env, char *buff, int size) {
 */
 void MP2Node::stabilizationProtocol() {
 	/*
-	* Implement this
-	*/
+	 * Implement this
+	 */
+    cout << "In stablization " << endl;
+
+    vector<Node> new_replicas, new_bosses;
+    Node this_node = Node(getMemberNode()->addr); // Current Node
+
+	// Find new successors and predecessors.
+	// We are in this method, means that one or more of them will be different than current successors/ predecessors.
+	// Store these in temporary variables for now.
+	for (unsigned int i = 0; i < ring.size(); i++) {
+		if (areNodesSame(ring[i], this_node)){
+			new_bosses.push_back(ring[(i - 1 + ring.size()) % ring.size()]);
+			new_bosses.push_back(ring[(i - 2 + ring.size()) % ring.size()]);
+
+			new_replicas.push_back(ring[(i + 1) % ring.size()]);
+			new_replicas.push_back(ring[(i + 2) % ring.size()]);
+
+			break;
+		}
+	}
+
+	Address myAddress = getMemberNode()->addr;
+
+    // Check new successors - if new successor is not same as current successor of the ring
+	// then we will need to transfer keys to new successor.
+    for (unsigned int i = 0; i < new_replicas.size(); i++) {
+        if (!areNodesSame(hasMyReplicas[i], new_replicas[i])) {
+            vector<pair<string, string>> keys = findMyKeys(PRIMARY);
+
+			// 1. Tertiary successor failed: When new successor is not part of existing ones.
+			// 	  then create all primary keys present on current node to this new successor (mark it tertiary).
+			// 2. Secondary successor failed: When new successor is already part of existing ones.
+			// 	                then update new successor's ReplicaType to Secondary.
+			MessageType messageType = nodeExistsInList(hasMyReplicas, new_replicas[i]) ? UPDATE : CREATE;
+			for (unsigned int k = 0; k < keys.size(); k++) {
+				Message *msg = new Message(-1, myAddress, messageType, keys[k].first, keys[k].second, static_cast<ReplicaType>(i + 1));
+				emulNet->ENsend(&myAddress, new_replicas[i].getAddress(), msg->toString());
+				free(msg);
+			}
+        }
+    }
+
+    // check for my bosses if they failed
+
+    for (unsigned int i = 0; i < haveReplicasOf.size(); i++) {
+        if (areNodesSame(haveReplicasOf[i], new_bosses[i])) {
+            break; // if the boss is same and at same location, then break because boss will take care of its boss and will also correct this nodes replica type if necessary as is shown below.
+        }
+        else {
+            if (ifExistNode(new_bosses, haveReplicasOf[i]) != -1) {
+                break; // if there is some boss present which was also present earlier then don't do anything as it will take care of things and nodes in this system only leave, no join is there'
+            } else {
+                // else find keys at this node which are secondary or tertiary depending on how this node is located according to the new boss.
+                vector<pair<string, string>> keys = findMyKeys(static_cast<ReplicaType>(i + 1));
+                Entry *e; // Update keys at this local server. No need to send message since all the operations are local.
+                for (unsigned int k = 0; k < keys.size(); k++){
+                    e = new Entry(keys[k].second, par->getcurrtime(), PRIMARY);
+                    ht->update(keys[k].first, e->convertToString());
+                    free(e);
+                }
+                if (i == 0){ // If this was the secondary replica of the failed boss, then make your first replica secondary from tertiary by updating it.
+                    // Also, add new tertiary replica by sending create messages for all the keys of the bosses which have now become primary at this server.
+                    Message *msg;
+                    for (unsigned int k = 0; k < keys.size(); k++) {
+                        if (areNodesSame(new_replicas[0], hasMyReplicas[0])){
+                            msg = new Message(-1, getMemberNode()->addr, UPDATE, keys[k].first, keys[k].second, SECONDARY);
+                            emulNet->ENsend(&getMemberNode()->addr, new_replicas[0].getAddress(), msg->toString());
+                        } else {
+                            msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, SECONDARY);
+                            emulNet->ENsend(&getMemberNode()->addr, new_replicas[0].getAddress(), msg->toString());
+                        }
+                        free(msg);
+
+                        msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, TERTIARY);
+                        emulNet->ENsend(&getMemberNode()->addr, new_replicas[1].getAddress(), msg->toString());
+                        free(msg);
+                    }
+                } else if (i == 1){
+                    // If this was the tertiary replica of the failed boss, then add both of your replicas
+                    // by sending create messages for all the keys of the bosses which have now become primary at this server.
+                    Message *msg;
+                    for (unsigned int k = 0; k < keys.size(); k++) {
+                        msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, SECONDARY);
+                        emulNet->ENsend(&getMemberNode()->addr, new_replicas[0].getAddress(), msg->toString());
+                        free(msg);
+                        msg = new Message(-1, getMemberNode()->addr, CREATE, keys[k].first, keys[k].second, TERTIARY);
+                        emulNet->ENsend(&getMemberNode()->addr, new_replicas[1].getAddress(), msg->toString());
+                        free(msg);
+                    }
+                }
+            }
+        }
+    }
+
+    // Now update the new replicas and bosses
+    hasMyReplicas  = new_replicas;
+    haveReplicasOf = new_bosses;
+
+}
+
+/*
+* CPF: Check if some vector of nodes contain a given node.
+* */
+int MP2Node::ifExistNode(vector<Node> v, Node n1){
+    vector<Node>::iterator iterator1 = v.begin();
+    int i = 0;
+    while(iterator1 != v.end()){ // iterate over each node in the vector
+        if (areNodesSame(n1, *iterator1)) // if the nodes are same return the location otherwise return -1
+            return i;
+        iterator1++;
+        i++;
+    }
+    return -1;
+}
+
+// Check if node exists in vector of nodes.
+bool MP2Node::nodeExistsInList(vector<Node> list, Node node){
+    vector<Node>::iterator it = list.begin();
+    while(it != list.end()){
+        if (areNodesSame(node, *it))
+            return true;
+        it++;
+    }
+    return false;
+}
+
+// CPF: Find Keys at this server that are residing here as of specific replica type.
+vector<pair<string, string>> MP2Node::findMyKeys(ReplicaType rep_type) {
+    map<string, string>::iterator iterator1 = ht->hashTable.begin();
+    vector<pair<string, string>> keys;
+    Entry *temp_e;
+    while (iterator1 != ht->hashTable.end()){ // Loop over all the keys in the hashtable and find the key that belong to the passed replica type
+        temp_e = new Entry(iterator1->second);
+        if (temp_e->replica == rep_type){
+            keys.push_back(pair<string, string>(iterator1->first, temp_e->value));
+        }
+        iterator1++;
+        free(temp_e); // free the entry variable
+    }
+    return keys; // return vector of pair of keys and values.
+}
+
+void MP2Node::handleCreateMessage(Message message)
+{
+	// TODO: Should we update transMap here? what is need of this map anyways?
+	// Create key value locally.
+	bool isSuccess = createKeyValue(message.key, message.value, message.replica);
+
+	// Send reply message to coordinator.
+    int transId = message.transID;
+	Address myAddress = getMemberNode()->addr;
+    Address coordinatorAddress(message.fromAddr);
+
+    // TODO: Check for stablilization protocol.
+    // if (transId < 0){
+	//	return;
+	// }
+
+    Message *msg = new Message(transId, myAddress, REPLY, isSuccess);
+    emulNet->ENsend(&myAddress, &coordinatorAddress, msg->toString());
+
+    // Log result - note that these logs are replica level CRUD messages.
+    if (isSuccess)
+	{
+        log->logCreateSuccess(&myAddress, false, transId, message.key, message.value);
+	}
+    else
+	{
+        log->logCreateFail(&myAddress, false, transId, message.key, message.value);
+	}
+}
+
+void MP2Node::handleReadMessage(Message message)
+{
+	// TODO: Should we update transMap here? what is need of this map anyways?
+	// read key value locally.
+	string value = readKey(message.key);
+
+	// Send reply message to coordinator.
+    int transId = message.transID;
+	Address myAddress = getMemberNode()->addr;
+    Address coordinatorAddress(message.fromAddr);
+
+    // TODO: Check for stablilization protocol.
+    if (transId < 0){
+		return;
+	}
+
+	// Send READREPLY message.
+    Message *msg = new Message(transId, myAddress, value);
+    emulNet->ENsend(&myAddress, &coordinatorAddress, msg->toString());
+
+    // Log result - note that these logs are replica level CRUD messages.
+    if (!value.empty())
+	{
+        log->logReadSuccess(&myAddress, false, transId, message.key, value);
+	}
+    else
+	{
+        log->logReadFail(&myAddress, false, transId, message.key);
+	}
+}
+
+void MP2Node::handleReadReplyMessage(Message message)
+{
+	int transId = message.transID;
+	if (this->activeTransactions.find(transId) == this->activeTransactions.end()) {
+		// We are here when transId is not present in activeTransactions.
+		// This happens only when we explicitly remove transId in checkAwaitedTransactions method.
+		// We have received a reply for which we already passed/ failed transaction.
+		// See logic in checkAwaitedTransactions for details.
+		return;
+	}
+
+	// Address myAddress = getMemberNode()->addr;
+    Address senderAddress(message.fromAddr);
+
+	// If message's value is not empty then message was successful.
+	bool isSuccess = !message.value.empty();
+
+	this->activeTransactions[transId].replyCount++;
+
+	if (isSuccess){
+		this->activeTransactions[transId].value = message.value;
+		this->activeTransactions[transId].successCount++;
+	}
+	else{
+		this->activeTransactions[transId].failureCount++;
+	}
+}
+
+void MP2Node::handleDeleteMessage(Message message)
+{
+	// TODO: Should we update transMap here? what is need of this map anyways?
+	// Delete key value locally.
+	bool isSuccess = deletekey(message.key);
+
+	// Send reply message to coordinator.
+    int transId = message.transID;
+	Address myAddress = getMemberNode()->addr;
+    Address coordinatorAddress(message.fromAddr);
+
+    // TODO: Check for stablilization protocol.
+    if (transId < 0){
+		return;
+	}
+
+    Message *msg = new Message(transId, myAddress, REPLY, isSuccess);
+    emulNet->ENsend(&myAddress, &coordinatorAddress, msg->toString());
+
+    // Log result - note that these logs are replica level CRUD messages.
+    if (isSuccess)
+	{
+        log->logDeleteSuccess(&myAddress, false, transId, message.key);
+	}
+    else
+	{
+        log->logDeleteFail(&myAddress, false, transId, message.key);
+	}
+}
+
+void MP2Node::handleUpdateMessage(Message message)
+{
+	// TODO: Should we update transMap here? what is need of this map anyways?
+	// Update key value locally.
+	bool isSuccess = updateKeyValue(message.key, message.value, message.replica);
+
+	// Send reply message to coordinator.
+    int transId = message.transID;
+	Address myAddress = getMemberNode()->addr;
+    Address coordinatorAddress(message.fromAddr);
+
+    // TODO: Check for stablilization protocol.
+    // if (_trans_id < 0)
+    //    return;
+
+    Message *msg = new Message(transId, myAddress, REPLY, isSuccess);
+    emulNet->ENsend(&myAddress, &coordinatorAddress, msg->toString());
+
+    // Log result - note that these logs are replica level CRUD messages.
+    if (isSuccess)
+	{
+        log->logUpdateSuccess(&myAddress, false, transId, message.key, message.value);
+	}
+    else
+	{
+        log->logUpdateFail(&myAddress, false, transId, message.key, message.value);
+	}
+}
+
+// REPLY message is sent by replicas for create/ update or delete operation.
+// This message is handled only at coordinator.
+void MP2Node::handleReplyMessage(Message message)
+{
+	int transId = message.transID;
+	if (this->activeTransactions.find(transId) == this->activeTransactions.end()) {
+		// We are here when transId is not present in activeTransactions.
+		// This happens only when we explicitly remove transId in checkAwaitedTransactions method.
+		// We have received a reply for which we already passed/ failed transaction.
+		// See logic in checkAwaitedTransactions for details.
+		return;
+	}
+
+	// Address myAddress = getMemberNode()->addr;
+    Address senderAddress(message.fromAddr);
+	bool isSuccess = message.success;
+
+	this->activeTransactions[transId].replyCount++;
+
+	if (isSuccess){
+		this->activeTransactions[transId].successCount++;
+	}
+	else{
+		this->activeTransactions[transId].failureCount++;
+	}
+}
+
+void MP2Node::addActiveTransaction(int transId, MessageType messageType, string key, string value, int sentToCount)
+{
+	TransactionDetail transactionDetail;
+	transactionDetail.messageType = messageType;
+	transactionDetail.transId = transId;
+	transactionDetail.sentNodeCount = sentToCount;
+	transactionDetail.replyCount = 0;
+	transactionDetail.successCount = 0;
+	transactionDetail.failureCount = 0;
+	transactionDetail.timeSent = par->getcurrtime();
+	transactionDetail.key = key;
+	transactionDetail.value = value;
+	this->activeTransactions.insert(pair<int, TransactionDetail>(transId, transactionDetail));
+}
+
+void MP2Node::checkAwaitedTransactions()
+{
+	Address myAddress = getMemberNode()->addr;
+
+	vector<int> deleteTransIds;
+
+	for (pair<int, TransactionDetail> i: this->activeTransactions){
+		// int currTime = par->getcurrtime();
+		int transId = i.first;
+		TransactionDetail transDetail = i.second;
+
+		// -1: no action, 0: fail, 1: success.
+		int result = -1;
+		if (transDetail.successCount >= 2){
+			result = 1;
+		}
+		// else if (currTime - transDetail.timeSent > REPLYTIMEOUT || transDetail.failureCount >= 2){
+		else if (transDetail.failureCount >= 2){
+			result = 0;
+		}
+
+		// We need to log success or failure.
+		if (result >= 0){
+			switch(transDetail.messageType){
+				case CREATE: 
+					if (result == 1){
+						log->logCreateSuccess(&myAddress, true, transId, transDetail.key, transDetail.value);
+					}
+					else{
+						log->logCreateFail(&myAddress, true, transId, transDetail.key, transDetail.value);
+					}
+					break;
+				case DELETE: 
+					if (result == 1){
+						log->logDeleteSuccess(&myAddress, true, transId, transDetail.key);
+					}
+					else{
+						log->logDeleteFail(&myAddress, true, transId, transDetail.key);
+					}
+					break;
+				case READ: 
+					if (result == 1){
+						log->logReadSuccess(&myAddress, true, transId, transDetail.key, transDetail.value);
+					}
+					else{
+						log->logReadFail(&myAddress, true, transId, transDetail.key);
+					}
+					break;
+				case UPDATE: 
+					if (result == 1){
+						log->logUpdateSuccess(&myAddress, true, transId, transDetail.key, transDetail.value);
+					}
+					else{
+						log->logUpdateFail(&myAddress, true, transId, transDetail.key, transDetail.value);
+					}
+					break;
+        		default:
+					break;
+    		}
+
+		    // cout << "Remove transaction: " << transId << " of type: " << transDetail.messageType << endl;
+			deleteTransIds.push_back(transId);
+		}
+	}
+
+	for (int tId: deleteTransIds){
+		this->activeTransactions.erase(tId);	
+	}
+}
+
+/**
+*
+* CPF: Assign successors and predecessors to this node i.e. change hasMyReplicas and haveReplicasOf
+*
+*/
+void MP2Node::assignReplicationNodes() {
+    Node currentNode = Node(getMemberNode()->addr);
+    if (hasMyReplicas.empty() || haveReplicasOf.empty()) {
+        for (unsigned int i = 0; i < ring.size(); i++) {
+            if (areNodesSame(ring[i], currentNode)){
+				haveReplicasOf.push_back(ring[(i - 1 + ring.size()) % ring.size()]);
+                haveReplicasOf.push_back(ring[(i - 2 + ring.size()) % ring.size()]);
+
+                hasMyReplicas.push_back(ring[(i + 1) % ring.size()]);
+                hasMyReplicas.push_back(ring[(i + 2) % ring.size()]);
+
+				return;
+            }
+        }
+    }
 }

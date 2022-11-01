@@ -24,6 +24,31 @@
 #define TFAIL 5
 
 /**
+ * CLASS NAME: NetworkMessage
+ *
+ * DESCRIPTION: Represents content of network messages like JOINREQ and HEARTBEAT.
+ */
+class NetworkMessage {
+private:
+public:
+    /**
+    * Constructor of the NetworkMessage class
+    */
+    NetworkMessage(int id, short port, long heartbeat) {
+        // this->Messagetype = messageType;
+        this->id = id;
+        this->port = port;
+        this->heartbeat = heartbeat;
+    }
+
+    // MP1Node::MsgTypes Messagetype;
+    int id;
+    short port;
+    long heartbeat;
+
+};
+
+/**
  * CLASS NAME: MP1Node
  *
  * DESCRIPTION: Class implementing Membership protocol functionalities for failure detection
@@ -47,6 +72,7 @@ public:
 	    JOINREP,
 	    UPDATEREQ,
 	    UPDATEREP,
+        HEARTBEAT,
 	    DUMMYLASTMSGTYPE
 	};
 
@@ -79,6 +105,17 @@ public:
 	void initMemberListTable(Member *memberNode);
 	void printAddress(Address *addr);
 	virtual ~MP1Node();
+
+    // New methods after this line
+    void addNodeToMemberList(int id, short port, long heartbeat, long timestamp);
+    Address getNodeAddress(int id, short port);
+    MemberListEntry* findNodeInMembershipList(int id);
+    void sendJoinRepMessage(Address* targetAddress);
+    void updateMembershipList(char* data);
+    bool isCurrentNode(Address* address);
+	void sendHeartbeat(Address* target);
+    MP1Node::MsgTypes getMessageTypeFromMessage(char* data, int size);
+    NetworkMessage* parseNetworkMessage(char* data, int size);
 };
 
 #endif /* _MP1NODE_H_ */
