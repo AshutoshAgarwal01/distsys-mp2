@@ -473,7 +473,6 @@ void MP2Node::propagateMessageFromClientToReplicas(MessageType msgType, string k
 		}
         emulNet->ENsend(&currAddress, replica.getAddress(), msg->toString());
 
-		// TODO: free mes. Why?
 		free(msg);
 	}
 
@@ -674,18 +673,18 @@ bool MP2Node::nodeExistsInList(vector<Node> list, Node node){
  * DESCRIPTION: CPF: Find specific type of keys (PRIMARY/ SECONDARY/ TERTIARY) at current server.
  */
 vector<pair<string, string>> MP2Node::getAllKeys(ReplicaType replicaType) {
-    map<string, string>::iterator iterator1 = ht->hashTable.begin();
     vector<pair<string, string>> keys;
-    Entry *temp_e;
-    while (iterator1 != ht->hashTable.end()){ // Loop over all the keys in the hashtable and find the key that belong to the passed replica type
-        temp_e = new Entry(iterator1->second);
-        if (temp_e->replica == replicaType){
-            keys.push_back(pair<string, string>(iterator1->first, temp_e->value));
+    
+	Entry *tempEntry;
+	for(auto htEntry: ht->hashTable){
+        tempEntry = new Entry(htEntry.second);
+		if (tempEntry->replica == replicaType){
+            keys.push_back(htEntry);
         }
-        iterator1++;
-        free(temp_e); // free the entry variable
-    }
-    return keys; // return vector of pair of keys and values.
+        free(tempEntry);
+	}
+
+    return keys;
 }
 
 /**
@@ -706,11 +705,6 @@ void MP2Node::handleCreateMessage(Message message)
     int transId = message.transID;
 	Address myAddress = getMemberNode()->addr;
     Address coordinatorAddress(message.fromAddr);
-
-    // TODO: Check for stablilization protocol.
-    // if (transId < 0){
-	//	return;
-	// }
 
     Message *msg = new Message(transId, myAddress, REPLY, isSuccess);
     emulNet->ENsend(&myAddress, &coordinatorAddress, msg->toString());
@@ -745,7 +739,7 @@ void MP2Node::handleReadMessage(Message message)
 	Address myAddress = getMemberNode()->addr;
     Address coordinatorAddress(message.fromAddr);
 
-    // TODO: Check for stablilization protocol.
+    // Check for stablilization protocol.
     if (transId < 0){
 		return;
 	}
@@ -784,7 +778,7 @@ void MP2Node::handleDeleteMessage(Message message)
 	Address myAddress = getMemberNode()->addr;
     Address coordinatorAddress(message.fromAddr);
 
-    // TODO: Check for stablilization protocol.
+    // Check for stablilization protocol.
     if (transId < 0){
 		return;
 	}
@@ -821,10 +815,6 @@ void MP2Node::handleUpdateMessage(Message message)
     int transId = message.transID;
 	Address myAddress = getMemberNode()->addr;
     Address coordinatorAddress(message.fromAddr);
-
-    // TODO: Check for stablilization protocol.
-    // if (_trans_id < 0)
-    //    return;
 
     Message *msg = new Message(transId, myAddress, REPLY, isSuccess);
     emulNet->ENsend(&myAddress, &coordinatorAddress, msg->toString());
