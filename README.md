@@ -32,22 +32,20 @@ However, this is very powerful specially when working in multiple types of shell
 
 3. After installing WSL (with Ubuntu distribution) we can open the terminal in Ubuntu environment. 
 
-Image TBD
+![Terminal](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/UbuntuInTerminal.png)
 
 4. WSL mounts a network drive to host Linux environment. 
   * WSL is here: \\wsl$\Ubuntu 
   * We can find it using "explorer.exe ." In Ubuntu console window as well. 
-
-Image TBD
   
 5. We should map it as a drive for ease of access. 
 
-Image TBD
+![Terminal](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/AsNetworkDrive.png)
 
 6. Windows folders can be accessed as below from WSL console. 
 Use '/mnt/' before windows path. 
 
-Image TBD
+![OpenWinInWsl](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/OpenWindowsFolderInWsl.png)
 
 ### Setup development environment using Visual Studio Code. 
 
@@ -55,23 +53,25 @@ Image TBD
 2. Install "Remote Development" extension in Visual Studio Code. 
 3. Switch between windows and WSL environments in Visual Studio code: 
   
-  *** a\. Switch from Windows to WSL environment **
+  
+  * a\. Switch from Windows to WSL environment
   
     In following snapshot, a folder is open in Windows environment. The terminal will not understand Linux here. 
   
-  **Image TBD**
+  ![WinToWsl](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/WindowsToWsl1.png)
   
   Following is the result after performing steps above. 
   
-  **Image TBD**
+  ![WinToWsl2](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/WindowsToWsl2.png)
   
-  *** b\. Switch from Windows to WSL environment **
   
-  **Image TBD**
+  * b\. Switch from WSL to Windows environment
+  
+  ![WslToWin](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/WSLToWindows1.png)
   
   Result of switching to Windows. 
   
-  **Image TBD**
+  ![WslToWin2](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/WslToWindows2.png)
   
 ### Setup C++ working environment 
 
@@ -80,5 +80,5 @@ Image TBD
   * **C/C++**: https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools 
   * **C/ C++ extension pack**: https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools-extension-pack 
   
-  **Image TBD**
+  ![Extn](https://github.com/AshutoshAgarwal01/distsys-mp2/blob/main/Markdown/Images/VsCodeExtensions.png)
 
